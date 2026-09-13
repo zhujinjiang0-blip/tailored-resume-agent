@@ -1,4 +1,4 @@
 interface:
   display_name: "简历定制 Agent"
   short_description: "按目标岗位定制简历，校验事实边界并保留 A4 排版直出 PDF"
-  default_prompt: "使用 $tailored-resume-agent，以目标岗位 HR 和面试官视角先诊断我的简历，再完成针对性补问、改写、30 秒红队复核和 A4 PDF 导出。"
+  default_prompt: "使用 $tailored-resume-agent 读取我的投递链接和简历，以目标岗位 HR 和面试官视角完成诊断、改写、30 秒红队复核和 A4 PDF 导出。"

@@ -26,6 +26,7 @@ description: Tailor a resume to a job description while preserving verified fact
 - 未确认事实、冲突事实和待补数字不能进入最终稿。
 - 用户确认事实之前不生成改写；用户确认改写之前不导出 PDF。
 - 默认只处理本地文件，不把简历、JD 或事实库发送到外部服务。
+- 支持读取公开或已登录的投递链接，但必须先把岗位正文、公司、岗位名称和要求提取到本地 run，再进行分析。
 
 ## 两个人工确认 Gate
 
@@ -88,17 +89,30 @@ python3 <skill>/scripts/resume_agent.py init \
 
 ### 2. 准备一次投递
 
+`--company` 和 `--role` 可以省略；当 `--jd` 是链接时，优先尝试从结构化数据、职位标题和页面元数据自动提取。
+
 ```bash
 python3 <skill>/scripts/resume_agent.py prepare \
   --store .resume-agent \
-  --company "<company>" \
-  --role "<role>" \
-  --jd <jd.txt|jd.pdf|jd.docx> \
+  --jd <https://job-url|jd.txt|jd.pdf|jd.docx> \
   --template <resume.html|resume.docx> \
   --filename "<company>-<role>-resume"
 ```
 
 `prepare` 会创建独立 run 目录，复制输入和事实快照，并生成 `requirements.json`、`rewrites.json` 和 `job.json`。随后先完成招聘方视角诊断，再根据诊断结果提出最多 6 个关键事实问题。后续只编辑该 run 目录内的文件，不改事实库原始文件。
+
+如果页面要求登录或验证码：
+
+```bash
+python3 <skill>/scripts/resume_agent.py prepare \
+  --store .resume-agent \
+  --jd "<job-url>" \
+  --template <resume.html|resume.docx> \
+  --headed \
+  --wait-ms 60000
+```
+
+浏览器使用事实库下的持久化 profile。完成登录后，脚本会提取页面文本；无法提取时必须停止并要求用户粘贴 JD，不得根据链接猜测岗位内容。
 
 ### 3. 确认事实并同步事实库
 
@@ -143,6 +157,7 @@ DOCX 模板会保留 DOCX 中间稿，并转换为 HTML 和 PDF 交付。PDF 不
 ## 必须停止并询问的情况
 
 - 简历、JD 或模板缺失、损坏或无法读取。
+- 投递链接需要登录、验证码或反爬验证，且可见浏览器仍无法取得岗位正文。
 - 简历事实之间存在冲突。
 - 岗位要求需要用户未提供的成果、工具或职责。
 - 逻辑无法在不改变事实边界的情况下改写。
@@ -152,6 +167,7 @@ DOCX 模板会保留 DOCX 中间稿，并转换为 HTML 和 PDF 交付。PDF 不
 ## 参考文件
 
 - [references/workflow.md](references/workflow.md)：六步用户流程、八节点执行顺序和 Gate 操作。
+- [references/job-link-reading.md](references/job-link-reading.md)：投递链接、登录验证、公司岗位识别和失败回退规则。
 - [references/ai-collaboration.md](references/ai-collaboration.md)：HR/面试官视角、六步诊断顺序和 30 秒红队复核。
 - [references/data-model.md](references/data-model.md)：四个核心对象、必填字段和示例。
 - [references/writing-rules.md](references/writing-rules.md)：事实边界、指标和岗位关键词规则。

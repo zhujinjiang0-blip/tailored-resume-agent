@@ -12,6 +12,7 @@ It also applies a 30-second HR red-team review before final delivery.
 ## Capabilities
 
 - Parse resumes and job descriptions from HTML, DOCX, PDF, text, or Markdown.
+- Read a job posting directly from a public or authenticated URL.
 - Maintain a reusable local evidence library.
 - Map each JD requirement to verified evidence.
 - Reject role inflation, unsupported numbers, vague claims, and broken evidence chains.
@@ -23,7 +24,8 @@ It also applies a 30-second HR red-team review before final delivery.
 Clone this repository into your Codex skills directory:
 
 ```bash
-git clone <repository-url> ~/.codex/skills/tailored-resume-agent
+git clone https://github.com/zhujinjiang0-blip/tailored-resume-agent.git \
+  ~/.codex/skills/tailored-resume-agent
 ```
 
 Then invoke it explicitly:
@@ -31,6 +33,17 @@ Then invoke it explicitly:
 ```text
 Use $tailored-resume-agent with my resume, target JD, and template. First diagnose the fit as the hiring HR and interviewer, then complete fact confirmation, targeted rewriting, a 30-second HR review, and A4 PDF export.
 ```
+
+For a job link:
+
+```bash
+python3 scripts/resume_agent.py prepare \
+  --store .resume-agent \
+  --jd "https://example.com/jobs/123" \
+  --template /path/to/resume.html
+```
+
+If the page requires login or verification, rerun with `--headed --wait-ms 60000` and finish the login in the browser window.
 
 ## Runtime Dependencies
 

@@ -17,6 +17,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 SCHEMA_VERSION = 1
@@ -33,6 +34,7 @@ RESULT_SIGNAL_RE = re.compile(
     r"规模|频率|周期|范围|排名|对比|覆盖|节省|提升|下降|降低|增长|上线|达成|完成|从.+到"
 )
 INVALID_FILENAME_CHARS = re.compile(r"[/\\:*?\"<>|\x00-\x1f]")
+UNRESOLVED_METADATA = {"", "待识别", "待确认", "unknown", "TBD"}
 
 
 class AgentError(RuntimeError):
@@ -87,6 +89,11 @@ def unique_destination(directory: Path, filename: str) -> Path:
         if not candidate.exists():
             return candidate
         counter += 1
+
+
+def is_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def extract_text(path: Path) -> str:
@@ -211,24 +218,39 @@ def init_store(args: argparse.Namespace) -> dict[str, Any]:
 def prepare_run(args: argparse.Namespace) -> dict[str, Any]:
     store = Path(args.store).expanduser().resolve()
     ensure_store(store)
-    jd_path = Path(args.jd).expanduser().resolve()
     template_path = Path(args.template).expanduser().resolve()
-
-    jd_suffix = jd_path.suffix.lower()
-    if jd_suffix not in EXTRACTABLE_SUFFIXES:
-        raise AgentError(f"不支持 JD 文件类型：{jd_suffix}")
 
     template_suffix = template_path.suffix.lower()
     if template_suffix not in HTML_SUFFIXES | DOCX_SUFFIXES:
         raise AgentError("模板必须是 HTML 或 DOCX；PDF 不能作为可编辑模板。")
 
-    jd_text = extract_text(jd_path).strip()
+    jd_meta: dict[str, Any] = {}
+    jd_source_type = "url" if is_http_url(args.jd) else "file"
+    if jd_source_type == "url":
+        jd_meta = read_job_url(
+            args.jd,
+            store,
+            headed=args.headed,
+            wait_ms=args.wait_ms,
+        )
+        jd_text = str(jd_meta.get("text", "")).strip()
+        jd_source = args.jd
+    else:
+        jd_path = Path(args.jd).expanduser().resolve()
+        jd_suffix = jd_path.suffix.lower()
+        if jd_suffix not in EXTRACTABLE_SUFFIXES:
+            raise AgentError(f"不支持 JD 文件类型：{jd_suffix}")
+        jd_text = extract_text(jd_path).strip()
+        jd_source = str(jd_path)
+
     if not jd_text:
         raise AgentError("JD 未提取到可读文本。")
 
-    filename = safe_filename_stem(args.filename or f"{args.company}-{args.role}-resume")
+    company = args.company.strip() or str(jd_meta.get("inferred_company", "")).strip() or "待识别"
+    role = args.role.strip() or str(jd_meta.get("inferred_role", "")).strip() or "待识别"
+    filename = safe_filename_stem(args.filename or f"{company}-{role}-resume")
     timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    run_id = f"{timestamp}-{slugify(args.company)}-{slugify(args.role)}-{secrets.token_hex(2)}"
+    run_id = f"{timestamp}-{slugify(company)}-{slugify(role)}-{secrets.token_hex(2)}"
     run_dir = run_dir_base(store) / run_id
     inputs_dir = run_dir / "inputs"
     analysis_dir = run_dir / "analysis"
@@ -236,10 +258,15 @@ def prepare_run(args: argparse.Namespace) -> dict[str, Any]:
     for directory in (inputs_dir, analysis_dir, output_dir):
         directory.mkdir(parents=True, exist_ok=False)
 
-    copied_jd = unique_destination(inputs_dir, f"jd{jd_suffix}")
     copied_template = unique_destination(inputs_dir, f"template{template_suffix}")
-    shutil.copy2(jd_path, copied_jd)
     shutil.copy2(template_path, copied_template)
+    if jd_source_type == "url":
+        copied_jd = inputs_dir / "jd-source.json"
+        write_json(copied_jd, jd_meta)
+    else:
+        jd_path = Path(args.jd).expanduser().resolve()
+        copied_jd = unique_destination(inputs_dir, f"jd{jd_path.suffix.lower()}")
+        shutil.copy2(jd_path, copied_jd)
     (inputs_dir / "jd.txt").write_text(jd_text + "\n", encoding="utf-8")
     (inputs_dir / "template.txt").write_text(extract_text(copied_template).strip() + "\n", encoding="utf-8")
 
@@ -253,15 +280,17 @@ def prepare_run(args: argparse.Namespace) -> dict[str, Any]:
         "created_at": now_iso(),
         "status": "analysis",
         "store": str(store),
-        "company": args.company,
-        "role": args.role,
+        "company": company,
+        "role": role,
         "language": args.language,
         "target_filename": filename,
         "input": {
             "jd": {
                 "path": str(copied_jd.relative_to(run_dir)),
                 "text_path": "inputs/jd.txt",
-                "source": str(jd_path),
+                "source": jd_source,
+                "source_type": jd_source_type,
+                "source_metadata_path": "inputs/jd-source.json" if jd_source_type == "url" else "",
             },
             "template": {
                 "path": str(copied_template.relative_to(run_dir)),
@@ -288,8 +317,8 @@ def prepare_run(args: argparse.Namespace) -> dict[str, Any]:
     requirements = {
         "schema_version": SCHEMA_VERSION,
         "role_lens": "有多年招聘经验的 HR + 该岗位面试官",
-        "company": args.company,
-        "role": args.role,
+        "company": company,
+        "role": role,
         "top_capabilities": [],
         "keywords": [],
         "hr_risks": [],
@@ -310,7 +339,13 @@ def prepare_run(args: argparse.Namespace) -> dict[str, Any]:
         "job": str(run_dir / "job.json"),
         "requirements": str(run_dir / "requirements.json"),
         "rewrites": str(run_dir / "rewrites.json"),
-        "next": "分析 JD 和事实，填写 requirements.json 与 rewrites.json，再进入两个确认 Gate。",
+        "company": company,
+        "role": role,
+        "jd_source_type": jd_source_type,
+        "next": (
+            "确认公司和岗位名称，分析 JD 和事实，填写 requirements.json 与 "
+            "rewrites.json，再进入两个确认 Gate。"
+        ),
     }
 
 
@@ -382,8 +417,18 @@ def validate_run(
 
     if job.get("schema_version") != SCHEMA_VERSION:
         errors.append("job.json 的 schema_version 不受支持。")
-    if not job.get("company") or not job.get("role"):
+    company = str(job.get("company", "")).strip()
+    role = str(job.get("role", "")).strip()
+    if not company or not role:
         errors.append("job.json 必须包含 company 和 role。")
+    elif company in UNRESOLVED_METADATA or role in UNRESOLVED_METADATA:
+        if strict_confirmations:
+            errors.append("最终交付前必须确认公司和岗位名称，不能保留“待识别”。")
+        else:
+            warnings.append("公司和岗位名称尚未完成确认。")
+    jd_info = job.get("input", {}).get("jd", {})
+    if jd_info.get("source_type") not in {None, "file", "url"}:
+        errors.append("job.json 的 JD source_type 必须是 file 或 url。")
     template_info = job.get("input", {}).get("template", {})
     template_format = template_info.get("format")
     if template_format not in {"html", "docx"}:
@@ -908,6 +953,66 @@ def find_soffice_executable() -> str:
     raise AgentError("找不到 LibreOffice/soffice，无法从 DOCX 导出 PDF。")
 
 
+def read_job_url(
+    url: str,
+    store: Path,
+    headed: bool = False,
+    wait_ms: int = 0,
+) -> dict[str, Any]:
+    script = Path(__file__).with_name("read_job_page.mjs")
+    if not script.exists():
+        raise AgentError(f"缺少岗位网页读取脚本：{script}")
+    node = find_node_executable()
+    env = os.environ.copy()
+    node_modules = find_node_modules()
+    if node_modules:
+        env["NODE_PATH"] = str(node_modules)
+    chrome = find_chrome_executable()
+    if chrome:
+        env["CHROME_PATH"] = chrome
+
+    effective_wait = wait_ms if wait_ms > 0 else (30_000 if headed else 5_000)
+    command = [
+        node,
+        str(script),
+        "--url",
+        url,
+        "--profile-dir",
+        str(store / "browser-profile"),
+        "--wait-ms",
+        str(effective_wait),
+    ]
+    if headed:
+        command.append("--headed")
+    process = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    payload: dict[str, Any] | None = None
+    for line in reversed(process.stdout.splitlines()):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            payload = parsed
+            break
+    if payload is None:
+        detail = (process.stderr or process.stdout or "").strip()
+        raise AgentError(f"岗位链接读取失败：\n{detail}")
+    if process.returncode != 0 or payload.get("ok") is not True:
+        detail = payload.get("error") or (process.stderr or process.stdout or "").strip()
+        if payload.get("needs_login"):
+            detail += (
+                "\n请使用 `--headed --wait-ms 60000` 重新运行，在打开的浏览器中登录或完成验证后等待自动提取。"
+            )
+        raise AgentError(f"岗位链接读取失败：{detail}")
+    return payload
+
+
 def export_html_pdf(html_path: Path, pdf_path: Path) -> dict[str, Any]:
     script = Path(__file__).with_name("export_pdf.mjs")
     if not script.exists():
@@ -1039,6 +1144,7 @@ def build_change_log(
         f"- 公司：{job.get('company', '')}",
         f"- 岗位：{job.get('role', '')}",
         f"- 生成时间：{now_iso()}",
+        f"- JD：{job.get('input', {}).get('jd', {}).get('source', '')}",
         f"- 模板：{job.get('input', {}).get('template', {}).get('path', '')}",
         f"- 事实确认：{job.get('confirmations', {}).get('facts_confirmed')}",
         f"- 改写确认：{job.get('confirmations', {}).get('rewrites_confirmed')}",
@@ -1215,12 +1321,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     prepare_parser = subparsers.add_parser("prepare", help="为一次投递创建独立 run。")
     prepare_parser.add_argument("--store", default=".resume-agent", help="事实库目录。")
-    prepare_parser.add_argument("--company", required=True, help="公司名称。")
-    prepare_parser.add_argument("--role", required=True, help="岗位名称。")
-    prepare_parser.add_argument("--jd", required=True, help="JD 文件。")
+    prepare_parser.add_argument("--company", default="", help="公司名称；留空时尝试从链接提取。")
+    prepare_parser.add_argument("--role", default="", help="岗位名称；留空时尝试从链接提取。")
+    prepare_parser.add_argument("--jd", required=True, help="JD 文件路径或投递链接。")
     prepare_parser.add_argument("--template", required=True, help="HTML 或 DOCX 简历模板。")
     prepare_parser.add_argument("--filename", default="", help="输出文件名主干。")
     prepare_parser.add_argument("--language", default="zh-CN", help="目标简历语言。")
+    prepare_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="打开可见浏览器，用于登录或完成验证码后读取岗位链接。",
+    )
+    prepare_parser.add_argument(
+        "--wait-ms",
+        type=int,
+        default=0,
+        help="页面加载后等待毫秒数；默认无头 5000，可见浏览器 30000。",
+    )
     prepare_parser.set_defaults(handler=prepare_run)
 
     validate_parser = subparsers.add_parser("validate", help="校验 run 的结构、证据链和确认 Gate。")

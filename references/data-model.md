@@ -153,6 +153,26 @@
 - 不使用 `[待确认]`、`[TODO]` 等占位文本。
 - 有唯一且可定位的 HTML XPath 或 DOCX 段落位置。
 
+## Run 输入
+
+文件：run 内的 `job.json`
+
+```json
+{
+  "input": {
+    "jd": {
+      "path": "inputs/jd-source.json",
+      "text_path": "inputs/jd.txt",
+      "source": "https://example.com/jobs/123",
+      "source_type": "url",
+      "source_metadata_path": "inputs/jd-source.json"
+    }
+  }
+}
+```
+
+`source_type` 为 `file` 或 `url`。链接模式会保存最终 URL、页面标题、自动识别的公司、岗位名称、所在地、提取文本、文本长度和来源区域。自动识别出的公司或岗位名称如果为“待识别”，必须在最终导出前更新。
+
 ## Run 目录
 
 ```text
