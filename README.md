@@ -9,6 +9,8 @@ The workflow uses two human confirmation gates:
 
 It also applies a 30-second HR red-team review before final delivery.
 
+At the start of each task, the agent lists the complete step count and the two confirmation points once, rather than sending repeated progress messages.
+
 ## Capabilities
 
 - Parse resumes and job descriptions from HTML, DOCX, PDF, text, or Markdown.
